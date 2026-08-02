@@ -1,0 +1,42 @@
+Docker Image Management Lab - Summary Report
+==========================================
+
+Images Created:
+- nodejs-lab-app:latest (original, unoptimized)
+- nodejs-lab-app:optimized (with .dockerignore)
+- nodejs-lab-app:multistage (multi-stage build)
+- nodejs-lab-app:advanced (advanced multi-stage with security)
+
+Optimization Techniques Applied:
+1. .dockerignore file to exclude unnecessary files
+2. Multi-stage builds to separate build and runtime
+3. Alpine Linux base images for smaller size
+4. Non-root user for security
+5. Proper signal handling with dumb-init
+6. Package manager cache cleanup
+
+Docker Hub Operations:
+- Tagged images with semantic versioning
+- Pushed images to Docker Hub registry
+- Pulled images from registry
+
+Cleanup Operations:
+- Removed dangling images
+- Cleaned up unused containers, networks, and volumes
+- Implemented automated cleanup scripts
+
+Best Practices Implemented:
+- Image size optimization
+- Security hardening
+- Performance optimization
+- Maintenance automation
+EOF
+
+# Display final image comparison
+echo "=== Final Image Size Comparison ==="
+docker images | grep nodejs-lab-app | awk '{print $1":"$2" - "$7}' | sort
+
+# Show final disk usage
+echo
+echo "=== Final Docker Disk Usage ==="
+docker system df
