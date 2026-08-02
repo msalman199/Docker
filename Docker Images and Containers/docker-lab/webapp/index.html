@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Custom Docker App</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f0f0f0; }
+        .container { background-color: white; padding: 20px; border-radius: 10px; }
+        h1 { color: #333; }
+        .info { background-color: #e7f3ff; padding: 10px; border-radius: 5px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My Custom Docker Application</h1>
+        <div class="info">
+            <p><strong>Container ID:</strong> <span id="hostname"></span></p>
+            <p><strong>Current Time:</strong> <span id="time"></span></p>
+            <p><strong>Lab:</strong> Docker Images and Containers</p>
+        </div>
+        <p>This application is running inside a Docker container built from a custom image!</p>
+    </div>
+    
+    <script>
+        document.getElementById('hostname').textContent = window.location.hostname;
+        document.getElementById('time').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>
