@@ -1,0 +1,30 @@
+# Logs
+logs/
+*.log
+
+# Temporary files
+temp/
+*.tmp
+
+# Development files
+README-dev.md
+tests/
+*.test.js
+
+# Git files
+.git/
+.gitignore
+
+# Node.js specific
+node_modules/
+npm-debug.log*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
