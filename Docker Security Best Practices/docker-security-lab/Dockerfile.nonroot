@@ -1,0 +1,5 @@
+FROM ubuntu:20.04
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+USER appuser
+WORKDIR /home/appuser
+CMD ["whoami"]
