@@ -1,0 +1,20 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    net-tools \
+    iputils-ping \
+    dnsutils \
+    htop \
+    strace \
+    tcpdump \
+    vim \
+    jq \
+    mysql-client \
+    postgresql-client \
+    redis-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /debug
+CMD ["/bin/bash"]
