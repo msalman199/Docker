@@ -1,0 +1,66 @@
+ Docker for AI/ML Workloads
+Objectives
+Design and build multi-stage Docker images that package a complete Python-based ML training pipeline, from data ingestion through model serialization
+Implement a Docker Compose deployment that coordinates multiple containers running distributed ML workloads with shared volume storage
+Evaluate containerized ML environment reproducibility by verifying that training runs produce consistent results across independent container instances
+Prerequisites
+Comfort with Linux command-line operations including file permissions, process management, and environment variables
+Familiarity with Python scripting and basic machine learning concepts such as training/test splits, model evaluation metrics, and neural network layers
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Install and Verify the Container Toolchain
+Step 1: Install Docker Engine and Docker Compose
+Install Docker Engine from the official Docker apt repository, then install the Docker Compose plugin. The commands below follow the official Docker installation procedure for Ubuntu.
+
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg lsb-release
+
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+Official installation guide if the URL above changes: https://docs.docker.com/engine/install/ubuntu/
+
+sudo tee /etc/apt/sources.list.d/docker.list <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable
+EOF
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+Troubleshoot this step:
+
+You may see "E: Malformed entry 1 in list file /etc/apt/sources.list.d/docker.list" if the heredoc wrote a backslash or extra whitespace into the file.
+Inspect the file with cat /etc/apt/sources.list.d/docker.list â it must be a single unbroken line; delete the file with sudo rm /etc/apt/sources.list.d/docker.list and recreate it using the heredoc above.
+Official reference: https://docs.docker.com/engine/install/ubuntu/
+sudo usermod -aG docker "$USER"
+newgrp docker
+Step 2: Verify All Tools Are Operational
+Run each verification command and confirm the expected output before proceeding.
+
+docker version
+docker compose version
+docker run --rm hello-world
+Confirmation: docker version prints both Client and Server sections with no permission errors; docker run --rm hello-world prints "Hello from Docker!" and exits with code 0. If you see "permission denied while trying to connect to the Docker daemon socket", log out and back in so the group membership takes effect, then re-run.
+
+Task 2: Design and Build a Containerized ML Training Image
+Problem Statement
+Design and implement a production-style Docker image that encapsulates a complete supervised-learning training pipeline. The image must install all Python ML dependencies at build time (not at runtime), accept hyperparameter arguments through environment variables or CLI flags, write a trained model artifact and a JSON metrics file to a mounted volume, and exit with code 0 on success or a non-zero code on any training failure. You choose the framework (TensorFlow, PyTorch, or scikit-learn), the dataset (synthetic or bundled), the model architecture, and the directory layout inside the image. The only constraints are those stated in the acceptance criteria below.
+
+Acceptance Criterion 1: Running the container with a host directory mounted at /app/output produces, inside that directory, a serialized model file and a metrics.json file containing at minimum the keys accuracy (or mae for regression tasks), loss, epochs_run, and timestamp. Verified by inspecting the mounted directory on the host after the container exits.
+
+Acceptance Criterion 2: The Docker image build completes without errors, the final image size does not exceed 4 GB as reported by docker images, and a second docker run invocation against the same image and a fresh empty output directory produces a metrics.json whose accuracy (or mae) value differs from the first run by no more than 5 percentage points, demonstrating reproducibility through a fixed random seed baked into the image or passed as an argument.
+
+Task 3: Deploy a Distributed ML Workflow with Docker Compose
+Problem Statement
+Design and implement a Docker Compose application (minimum two services) that models a realistic distributed ML workflow. One service must act as a data-preparation worker that preprocesses a dataset and writes the result to a named Docker volume. A second service must act as a training worker that reads the preprocessed data from that same volume, trains a model, and writes evaluation results to a second named volume. A third optional service may serve a lightweight status endpoint or aggregate logs. The two mandatory services must start in dependency order enforced by Compose health checks or depends_on with condition: service_completed_successfully, so the training worker never starts before the data-preparation worker has finished writing its output. You design the service images, the volume layout, the inter-service communication strategy, and the Compose file structure.
+
+Acceptance Criterion 1: Running docker compose up --abort-on-container-exit from the project directory brings both mandatory services to completion with exit code 0, and the training worker's output volume contains a results.json file with at minimum the keys model_accuracy (or equivalent regression metric) and data_source (a string identifying the preprocessed file it consumed). Verified by running docker compose run training-worker cat /path/to/results.json or equivalent after the stack exits.
+
+Acceptance Criterion 2: If the data-preparation service is artificially broken (for example, by pointing its image to a nonexistent script path), docker compose up must exit with a non-zero code and the training worker must not start, demonstrating that the dependency and health-check logic is correctly enforced. Verified by observing container exit codes with docker compose ps -a after the failed run.
+
+Expected Outcomes
+A versioned, self-contained Docker image that trains an ML model reproducibly and emits structured metrics to a host-mounted volume without any manual dependency installation at runtime
+A working Docker Compose stack that enforces service startup order, isolates data between pipeline stages using named volumes, and fails fast when an upstream stage does not complete successfully
+Conclusion
+Containerizing ML workloads with Docker eliminates environment drift between development and production by encoding every dependency into an immutable image layer. Orchestrating multi-stage pipelines with Docker Compose enforces data-flow contracts between services and makes failure modes explicit through exit codes and health checks. These patterns form the operational foundation for scalable ML systems deployed on any container-capable infrastructure.
