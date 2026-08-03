@@ -1,0 +1,122 @@
+ Advanced Docker Security
+Objectives
+Design and implement a hardened Docker daemon configuration that enforces user namespace remapping, resource limits, and a custom seccomp profile from scratch
+Build a minimal, patched container image using multi-stage builds and validate its attack surface through automated vulnerability scanning
+Construct an end-to-end security scanning pipeline that evaluates images for CVEs, secrets, and Dockerfile misconfigurations and produces a structured report
+Prerequisites
+Comfort with Linux command-line operations including file editing, process management, and reading man pages
+Familiarity with Linux user and group management, file permissions, and basic networking concepts
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Install and Verify the Security Toolchain
+Requirement 1
+Install Docker Engine, Trivy, Hadolint, and Dockle on the bare Ubuntu instance. Each tool must be installed from its official source. After installation, confirm that the Docker daemon is active, that each CLI tool responds to a version or help flag, and that a basic docker run hello-world completes without error.
+
+# Official Docker installation guide (use this if any step below fails):
+# https://docs.docker.com/engine/install/ubuntu/
+
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg lsb-release
+
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+sudo tee /etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable
+EOF
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker run hello-world
+Troubleshoot this step:
+
+You see E: Malformed entry 1 in list file /etc/apt/sources.list.d/docker.list â the heredoc wrote a broken line.
+Inspect the file with cat /etc/apt/sources.list.d/docker.list; it must be one unbroken line with no backslashes; delete the file with sudo rm /etc/apt/sources.list.d/docker.list and recreate it using the heredoc above.
+Official guide: https://docs.docker.com/engine/install/ubuntu/
+# Official Trivy installation guide (use this if the URL below changes):
+# https://aquasecurity.github.io/trivy/latest/getting-started/installation/
+
+curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+  | sudo sh -s -- -b /usr/local/bin
+trivy --version
+Troubleshoot this step:
+
+You see curl: (22) The requested URL returned error: 404 â the install script URL has changed upstream.
+Visit https://github.com/aquasecurity/trivy/releases, download the latest .deb package manually with curl -fsSL -o trivy.deb <release-url>, then install with sudo dpkg -i trivy.deb.
+Official guide: https://aquasecurity.github.io/trivy/latest/getting-started/installation/
+# Official Hadolint releases page (use this if the URL below changes):
+# https://github.com/hadolint/hadolint/releases
+
+HADOLINT_VERSION="v2.12.0"
+curl -fsSL "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+  -o /tmp/hadolint
+sudo install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
+hadolint --version
+Troubleshoot this step:
+
+You see hadolint: cannot execute binary file: Exec format error â the binary downloaded is not an ELF executable, meaning the URL returned an HTML error page instead.
+Run file /usr/local/bin/hadolint; if it reports HTML document, the download failed silently â re-run the curl command and check the GitHub releases page for the correct filename.
+Official releases: https://github.com/hadolint/hadolint/releases
+# Official Dockle releases page (use this if the URL below changes):
+# https://github.com/goodwithtech/dockle/releases
+
+DOCKLE_VERSION="v0.4.14"
+curl -fsSL "https://github.com/goodwithtech/dockle/releases/download/${DOCKLE_VERSION}/dockle_${DOCKLE_VERSION#v}_Linux-64bit.deb" \
+  -o /tmp/dockle.deb
+sudo dpkg -i /tmp/dockle.deb
+dockle --version
+Troubleshoot this step:
+
+You see dpkg: error processing archive /tmp/dockle.deb (--install): not a Debian format archive â the .deb file is an HTML error page because the version string in the URL did not match the release filename.
+Visit https://github.com/goodwithtech/dockle/releases, copy the exact .deb filename for the latest release, and substitute it into the curl command above.
+Official releases: https://github.com/goodwithtech/dockle/releases
+Requirement 2
+Verify the complete toolchain is operational by running one functional check per tool: pull alpine:latest with Docker, scan it with Trivy for HIGH and CRITICAL CVEs, lint any valid single-line Dockerfile with Hadolint, and scan alpine:latest with Dockle. All four commands must exit without a fatal error (non-zero exit caused by a tool crash, not by findings).
+
+docker pull alpine:latest
+trivy image --severity HIGH,CRITICAL alpine:latest
+echo "FROM alpine:latest" | hadolint -
+dockle alpine:latest
+Confirmation: Each command prints output to stdout. Trivy and Dockle may report findings â that is expected and correct. A tool crash or command not found means installation failed and must be fixed before proceeding.
+
+Task 2: Harden the Docker Daemon and Build a Minimal Secure Image
+Requirement 1
+Design and implement a Docker daemon configuration (/etc/docker/daemon.json) that enforces all of the following controls simultaneously: user namespace remapping using the dockremap system user, inter-container communication disabled, no new privileges as a daemon-level default, JSON file logging with a maximum file size of 10 MB and a maximum of 3 rotated files, and a nofile ulimit hard and soft limit of 64000. After restarting the daemon, confirm each control is active by inspecting docker info output and by running a container that attempts to gain new privileges and observing that it is blocked.
+
+Acceptance criteria:
+
+docker info reports userns-remap is enabled and shows the dockremap mapping; docker info also shows icc is disabled.
+A container launched with --security-opt=no-new-privileges:true and --cap-drop=ALL that runs id inside must show a non-zero UID (not root UID 0 on the host), confirming namespace remapping is in effect.
+Requirement 2
+Write a multi-stage Dockerfile that produces a production image meeting all of the following constraints: the build stage uses ubuntu:22.04 and compiles or assembles any artifacts needed; the production stage uses alpine:latest as its base; the final image contains no package manager cache, no build tools, and no shell other than /bin/sh; a non-root user with UID 1001 owns and runs the application; and a HEALTHCHECK instruction is present. Build the image, tag it secure-app:1.0, and run it with --read-only, --cap-drop=ALL, --memory=64m, --pids-limit=50, and --security-opt=no-new-privileges:true.
+
+Acceptance criteria:
+
+docker image inspect secure-app:1.0 shows Config.User is 1001 or the named non-root user, and the compressed image size reported by docker images secure-app:1.0 is under 20 MB.
+The running container's process list (obtained via docker top <container>) shows no process running as UID 0, and docker stats <container> --no-stream confirms memory usage is capped at 64 MB.
+Task 3: Build an Automated Security Scanning Pipeline
+Requirement 1
+Design and implement a shell script named scan-pipeline.sh that accepts a Docker image name as its sole argument and performs the following scans in sequence without any manual intervention: a Trivy CVE scan scoped to HIGH and CRITICAL severity, a Trivy secrets scan, a Trivy misconfiguration scan, and a Dockle CIS benchmark scan. The script must write each scan's output to a separate file inside a reports/ directory named after the image and scan type, and it must print a human-readable summary to stdout that lists the total count of findings per scan type. The script must exit with code 1 if any HIGH or CRITICAL CVE is found, and exit with code 0 if none are found.
+
+Acceptance criteria:
+
+Running bash scan-pipeline.sh vulnerable-app:latest (where vulnerable-app:latest is a locally built image based on ubuntu:18.04 with no patches applied) produces four non-empty report files in reports/ and exits with code 1.
+Running bash scan-pipeline.sh secure-app:1.0 (the image built in Task 2) produces four non-empty report files and exits with code 0, confirming the hardened image has no HIGH or CRITICAL CVEs.
+Requirement 2
+Lint all Dockerfiles produced during this lab using Hadolint and produce a consolidated findings file named dockerfile-audit.txt that lists each Dockerfile path, each rule violation code (for example DL3008), and the line number of the violation. Any Dockerfile that triggers a rule at severity ERROR must be revised until Hadolint reports no ERROR-level findings for it. INFO and WARNING findings do not require remediation but must still appear in dockerfile-audit.txt.
+
+Acceptance criteria:
+
+dockerfile-audit.txt exists, is non-empty, and contains at least one entry for each Dockerfile examined; the file must be human-readable plain text with one finding per line.
+Re-running Hadolint against every Dockerfile that previously had ERROR-level findings returns exit code 0 for each of those files, confirming all errors are resolved.
+Expected Outcomes
+A running Docker daemon enforcing user namespace remapping, resource limits, and inter-container communication controls, with a hardened image that passes the automated scan pipeline with exit code 0
+A reproducible scan-pipeline.sh script and dockerfile-audit.txt that together provide a documented, auditable security baseline for every image and Dockerfile produced in the lab
+Conclusion
+This lab required you to reason about Docker security at three distinct layers: daemon configuration, image construction, and automated scanning. The controls you implemented â namespace remapping, capability dropping, read-only filesystems, and CVE gating in the pipeline â reflect the defense-in-depth approach used in production container environments. Revisit the Trivy and Dockle documentation as new CVE databases are published, because a pipeline that passes today may fail after the next database update.
