@@ -1,0 +1,215 @@
+Docker Compose Networking
+Objectives
+Design and implement a multi-tier application stack using Docker Compose with explicit custom bridge networks, enforcing network-layer isolation between tiers.
+Configure service discovery, inter-container DNS resolution, and reverse-proxy routing across network boundaries without exposing internal services directly to the host.
+Diagnose and resolve network reachability failures using container-native inspection tools and Docker network primitives.
+Prerequisites
+Comfort with Linux networking concepts: IP subnets, port binding, and DNS resolution.
+Familiarity with YAML syntax and reading structured configuration files.
+Prior exposure to HTTP request/response cycles and the role of a reverse proxy.
+Lab Environment
+You will work on a dedicated AWS EC2 Ubuntu instance provided by Al Nafi. The instance has a base Ubuntu installation; you will install all required tools in Task 1.
+
+Task 1: Environment Setup
+Step 1.1 â Install Docker Engine and Docker Compose Plugin
+Install Docker Engine from Docker's official APT repository. The Compose plugin (docker compose) ships as part of the docker-compose-plugin package and is the current supported form; the legacy standalone binary is not required.
+
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+Official installation guide if the URL above changes: https://docs.docker.com/engine/install/ubuntu/
+
+sudo tee /etc/apt/sources.list.d/docker.list <<'EOF'
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable
+EOF
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+Troubleshoot this step:
+
+Error: E: Malformed entry 1 in list file /etc/apt/sources.list.d/docker.list â the file contains a literal backslash or newline inside the deb line.
+Inspect with cat /etc/apt/sources.list.d/docker.list; the file must be exactly one unbroken line. Delete it with sudo rm /etc/apt/sources.list.d/docker.list and recreate using the heredoc above.
+https://docs.docker.com/engine/install/ubuntu/#install-using-the-repository
+Step 1.2 â Configure Runtime Access and Verify Installation
+Add your user to the docker group so that subsequent commands run without sudo. Apply the group membership in the current shell session, then confirm both the daemon and the Compose plugin are operational.
+
+sudo usermod -aG docker $USER
+newgrp docker
+docker version
+docker compose version
+docker run --rm hello-world
+Confirmation: docker version prints both Client and Server sections without permission errors. hello-world prints "Hello from Docker!" and exits cleanly.
+
+Troubleshoot this step:
+
+Error: permission denied while trying to connect to the Docker daemon socket after running newgrp docker.
+Verify group membership with id; if docker is absent, log out of the EC2 session entirely and reconnect via SSH, then retry.
+https://docs.docker.com/engine/install/linux-postinstall/
+Task 2: Multi-Tier Application with Custom Network Isolation
+Architectural Constraints
+Three named bridge networks must exist: frontend-net, backend-net, and data-net.
+The data-net network must carry no published host ports; database containers are reachable only by service name from within backend-net.
+The reverse proxy (Nginx) is the sole service attached to both frontend-net and backend-net, acting as the single ingress point. No application service publishes a host port directly.
+All credentials must be supplied via environment variables or an .env file; no credential may be hardcoded inside a Dockerfile.
+Step 2.1 â Define the Compose Stack and Network Topology
+Design a docker-compose.yml that declares the following services and their network memberships:
+
+Service	Image	Networks	Publishes host port?
+proxy	nginx:alpine	frontend-net, backend-net	Yes â 80
+api	custom build	backend-net, data-net	No
+db	postgres:15-alpine	data-net	No
+cache	redis:7-alpine	data-net	No
+Each network must specify driver: bridge and a non-overlapping /24 subnet under the 172.30.0.0/16 block. The db and cache services must declare named volumes for persistence.
+
+The interface contract your api service must satisfy at the HTTP level:
+
+GET  /health   -> 200 {"status": "ok", "db": "ok", "cache": "ok"}
+GET  /items    -> 200 [{"id": int, "name": str, "created_at": str}]
+POST /items    -> 201 {"id": int, "name": str, "created_at": str}
+               body: {"name": str}
+The api service must connect to db using the hostname db and to cache using the hostname cache â both resolved via Docker's embedded DNS, not hardcoded IPs.
+
+Confirmation: docker compose config exits 0 and prints the resolved configuration with all four networks and four services visible.
+
+Step 2.2 â Build the API Service Image
+Implement the api service as a containerised application in any language. The Dockerfile must satisfy these constraints:
+
+Base image must be a slim or alpine variant.
+Dependencies are installed in a layer that is cached independently from application source code (copy the dependency manifest first, install, then copy source).
+The process must run as a non-root user inside the container.
+The image must expose port 5000.
+Type contract for the application's database initialisation routine:
+
+class DatabaseBootstrap:
+    def wait_for_ready(self, host: str, port: int, timeout_seconds: int) -> bool: ...
+    def apply_schema(self) -> None: ...
+    def seed_initial_data(self) -> int: ...  # returns row count inserted
+The wait_for_ready method must implement retry logic with exponential backoff; the container must not crash-loop if the database is still starting.
+
+Confirmation: docker compose build api completes without error. docker image inspect on the resulting image shows a non-root User field.
+
+Step 2.3 â Deploy, Verify Isolation, and Validate Routing
+Bring the full stack up and perform the following verification sequence. Each check must produce the stated result before you proceed to the next.
+
+# Bring the stack up in detached mode
+docker compose up -d --build
+
+# Confirm all four services reach 'running' state
+docker compose ps
+Confirmation: all services show running (or healthy if healthchecks are defined); no service shows restarting.
+
+# Verify proxy can reach api by service name (cross-network DNS)
+docker compose exec proxy wget -qO- http://api:5000/health
+
+# Verify api can reach db and cache by service name
+docker compose exec api ping -c 2 db
+docker compose exec api ping -c 2 cache
+
+# Verify isolation: proxy must NOT reach db directly
+docker compose exec proxy ping -c 2 db
+Confirmation: the first two blocks succeed. The final ping from proxy to db must time out or return Name or service not known â this confirms data-net is invisible to frontend-net.
+
+# Validate end-to-end routing through the proxy
+curl -fsSL http://localhost/health
+curl -fsSL http://localhost/items
+curl -fsSL -X POST http://localhost/items \
+  -H "Content-Type: application/json" \
+  -d '{"name":"network-lab-item"}'
+curl -fsSL http://localhost/items
+Confirmation: the final GET /items response includes the item posted in the preceding step, confirming the full proxy -> api -> db write path is functional.
+
+Task 3: Network Inspection, Failure Injection, and Recovery
+Architectural Constraints
+All diagnostic work must be performed using Docker-native commands (docker network inspect, docker compose exec, docker logs) and standard Linux networking utilities available inside the containers.
+No host-level iptables rules may be manually added; isolation must be achieved exclusively through Compose network declarations.
+Step 3.1 â Inspect and Document the Live Network State
+Using docker network inspect and docker compose exec, collect and record the following facts about the running stack:
+
+The gateway IP and assigned container IP for each service on each network it belongs to.
+The DNS server address that containers use for service-name resolution (find it inside /etc/resolv.conf within any running container).
+Which networks the proxy container is simultaneously attached to, and what IP it holds on each.
+Produce a plain-text network map file at ~/compose-lab/network-map.txt in the following format:
+
+service=proxy
+  frontend-net  ip=<value>  gateway=<value>
+  backend-net   ip=<value>  gateway=<value>
+
+service=api
+  backend-net   ip=<value>  gateway=<value>
+  data-net      ip=<value>  gateway=<value>
+
+service=db
+  data-net      ip=<value>  gateway=<value>
+
+service=cache
+  data-net      ip=<value>  gateway=<value>
+
+dns-resolver=<ip seen in /etc/resolv.conf>
+Confirmation: the file exists and every <value> field is populated with a real IP address from the 172.30.0.0/16 block.
+
+Step 3.2 â Inject a Network Partition and Observe Failure Propagation
+Disconnect the api service from data-net at runtime using docker network disconnect. This simulates a network partition between the application tier and the data tier.
+
+docker network disconnect <project>_data-net <api-container-name>
+Immediately after disconnecting, probe the health endpoint through the proxy and record the exact HTTP status code and response body returned:
+
+curl -fsSL -w "\nHTTP_STATUS:%{http_code}\n" http://localhost/health
+Then inspect the api service logs to identify the error class reported when the database connection attempt fails:
+
+docker compose logs --tail=30 api
+Confirmation: the health endpoint returns a non-200 status code and the logs show a connection-refused or DNS-resolution error targeting db â not a generic 500 with no detail.
+
+Reconnect api to data-net and confirm the health endpoint returns 200 again:
+
+docker network connect <project>_data-net <api-container-name>
+curl -fsSL http://localhost/health
+Step 3.3 â Implement a Healthcheck and Dependency Gate
+Add a healthcheck directive to the db service in docker-compose.yml that uses pg_isready to confirm PostgreSQL is accepting connections. Add a depends_on condition to the api service so it waits for db to be healthy before starting.
+
+The healthcheck must satisfy:
+
+Interval: 5 seconds
+Timeout: 3 seconds
+Retries: 5
+Start period: 10 seconds (grace period before failures count)
+After updating the Compose file, tear down and redeploy the full stack:
+
+docker compose down -v
+docker compose up -d --build
+docker compose ps
+Confirmation: docker compose ps shows db with status healthy before api transitions to running. The api service does not appear in a restarting state at any point during startup.
+
+Code Contracts
+Students must implement the following interfaces. The signatures define the contract; implementation language and pattern are the student's choice.
+
+# api/bootstrap.py â database readiness and schema management
+class DatabaseBootstrap:
+    def wait_for_ready(self, host: str, port: int, timeout_seconds: int) -> bool: ...
+    def apply_schema(self) -> None: ...
+    def seed_initial_data(self) -> int: ...  # returns count of rows inserted
+# api/store.py â data access layer
+class ItemStore:
+    def list_items(self) -> list[dict]: ...
+    def create_item(self, name: str) -> dict: ...  # returns persisted item with id and created_at
+# api/cache.py â cache-aside pattern wrapper
+class CacheLayer:
+    def get(self, key: str) -> str | None: ...
+    def set(self, key: str, value: str, ttl_seconds: int) -> None: ...
+    def invalidate(self, key: str) -> None: ...
+# api/health.py â dependency health aggregation
+class HealthChecker:
+    def check_database(self) -> bool: ...
+    def check_cache(self) -> bool: ...
+    def report(self) -> dict: ...  # {"status": str, "db": str, "cache": str}
+Expected Outcomes
+The proxy container is the only service reachable from the host on port 80; all other services are accessible exclusively through inter-container DNS within their declared networks, and docker network inspect confirms no unintended cross-network reachability.
+Disconnecting api from data-net causes the /health endpoint to return a non-200 response within one health-check interval, and reconnecting restores a 200 response without restarting any container.
+Troubleshooting
+If curl http://localhost/health returns a 502 Bad Gateway from Nginx, what does docker compose logs proxy reveal about which upstream address Nginx is attempting to connect to, and does that hostname resolve correctly from inside the proxy container using nslookup?
+If the api container enters a restarting loop immediately after docker compose up, what does docker compose logs api show as the last error before exit, and does the error originate from the database connection attempt, the schema migration, or the HTTP listener binding?
+Conclusion
+This lab demonstrated how Docker Compose network declarations enforce tier-level isolation at the Linux bridge layer, making service-name DNS resolution the controlled mechanism for inter-service communication rather than open host networking. The failure-injection exercise in Task 3 established that network partitions produce observable, diagnosable errors at the application layer â a property that depends on explicit healthcheck and dependency-gate configuration rather than implicit startup ordering. Mastery of these primitives is a prerequisite for designing resilient multi-container systems in both development and production environments.
