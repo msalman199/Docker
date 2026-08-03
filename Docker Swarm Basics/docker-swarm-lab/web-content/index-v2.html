@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Docker Swarm Lab - Version 2</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #e8f5e8; }
+        .container { background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #4CAF50; }
+        .info { background-color: #f1f8e9; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        .version { background-color: #4CAF50; color: white; padding: 5px 10px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to Docker Swarm Lab <span class="version">v2.0</span></h1>
+        <div class="info">
+            <h3>Service Information:</h3>
+            <p><strong>Container ID:</strong> <span id="hostname"></span></p>
+            <p><strong>Service:</strong> Web Frontend (Updated)</p>
+            <p><strong>Stack:</strong> web-stack</p>
+            <p><strong>Lab:</strong> Docker Swarm Basics</p>
+            <p><strong>Version:</strong> 2.0 - Rolling Update Demo</p>
+        </div>
+        <p>This is the updated version of our web service, demonstrating rolling updates in Docker Swarm.</p>
+        <p>The update was performed with zero downtime using Docker Swarm's rolling update feature.</p>
+    </div>
+    <script>
+        document.getElementById('hostname').textContent = window.location.hostname;
+    </script>
+</body>
+</html>
